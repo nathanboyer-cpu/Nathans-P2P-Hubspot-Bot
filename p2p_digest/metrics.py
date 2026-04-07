@@ -104,6 +104,17 @@ def _hours_between(start: datetime | None, end: datetime | None) -> float | None
     return (end - start).total_seconds() / 3600.0
 
 
+def _first_activity_datetime(
+    props: dict[str, Any], property_names: tuple[str, ...]
+) -> tuple[datetime | None, str | None]:
+    """First populated HubSpot deal property in priority order (sales activity, emails, etc.)."""
+    for name in property_names:
+        dt = _parse_hubspot_time(props.get(name))
+        if dt is not None:
+            return dt, name
+    return None, None
+
+
 def hours_in_form_signed_column_emoji(hours: float | None) -> str:
     """Traffic light from hours sitting in Form signed (reference → now)."""
     if hours is None:
@@ -159,6 +170,7 @@ class DigestMetrics:
     funnel_start_mode: str
     deal_lines_by_partner: dict[str, list[dict[str, Any]]]
     carry_usd_per_day: float
+    hubspot_last_activity_properties: tuple[str, ...]
 
 
 def _bucket_summary(b: PartnerBucket) -> dict[str, Any]:
@@ -193,6 +205,7 @@ def compute_metrics(
     funnel_start_mode: str = "form_signed",
     carry_usd_per_day: float = 1000.0,
     include_form_signed_deal_breakdown: bool = False,
+    last_activity_property_names: tuple[str, ...] = (),
 ) -> DigestMetrics:
     now = datetime.now(timezone.utc)
     deal_lines_by_partner: dict[str, list[dict[str, Any]]] = defaultdict(list)
@@ -259,6 +272,8 @@ def compute_metrics(
                 if days_in is not None:
                     hrs = _hours_between(ref, now)
                     carry = int(round(days_in * carry_usd_per_day))
+                    act_dt, act_prop = _first_activity_datetime(props, last_activity_property_names)
+                    days_since_act = _days_between(act_dt, now) if act_dt is not None else None
                     deal_lines_by_partner[partner].append(
                         {
                             "deal_id": str(d.get("id", "") or ""),
@@ -269,6 +284,11 @@ def compute_metrics(
                             "hours_in_form_signed_column": round(hrs, 2) if hrs is not None else None,
                             "sla_emoji": hours_in_form_signed_column_emoji(hrs),
                             "carry_estimate_usd": carry,
+                            "last_hubspot_activity_at_utc": act_dt.isoformat() if act_dt else None,
+                            "last_hubspot_activity_source_property": act_prop,
+                            "days_since_last_hubspot_activity": round(days_since_act, 1)
+                            if days_since_act is not None
+                            else None,
                         }
                     )
 
@@ -320,6 +340,9 @@ def compute_metrics(
         funnel_start_mode=funnel_start_mode,
         deal_lines_by_partner=lines_sorted,
         carry_usd_per_day=carry_usd_per_day,
+        hubspot_last_activity_properties=last_activity_property_names
+        if include_form_signed_deal_breakdown
+        else (),
     )
 
 
@@ -347,4 +370,5 @@ def metrics_to_dict(m: DigestMetrics) -> dict[str, Any]:
         "non_nexxen_bucket": m.non_nexxen,
         "deal_lines_by_partner": m.deal_lines_by_partner,
         "carry_usd_per_day": m.carry_usd_per_day,
+        "hubspot_last_activity_properties": list(m.hubspot_last_activity_properties),
     }

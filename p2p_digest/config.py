@@ -91,6 +91,8 @@ class Settings:
     hubspot_require_p2p_partner: bool
     hubspot_p2p_partner_filter_values: tuple[str, ...]
     form_signed_carry_usd_per_day: float
+    # Deal properties tried in order for "last communication" (HubSpot CRM timestamps on the deal)
+    hubspot_last_activity_properties: tuple[str, ...]
 
     @classmethod
     def load(cls, *, require_hubspot_token: bool = True) -> Settings:
@@ -143,6 +145,21 @@ class Settings:
         form_signed_carry_usd_per_day = _parse_float_opt(
             _opt("FORM_SIGNED_CARRY_USD_PER_DAY", ""), 1000.0
         )
+        lap_raw = _opt(
+            "HUBSPOT_LAST_ACTIVITY_PROPERTIES",
+            "hs_last_sales_activity_timestamp,"
+            "hs_last_logged_outgoing_email_date,"
+            "hs_last_logged_incoming_email_date,"
+            "hs_lastmodifieddate",
+        )
+        hubspot_last_activity_properties = _parse_csv_trimmed(lap_raw)
+        if not hubspot_last_activity_properties:
+            hubspot_last_activity_properties = (
+                "hs_last_sales_activity_timestamp",
+                "hs_last_logged_outgoing_email_date",
+                "hs_last_logged_incoming_email_date",
+                "hs_lastmodifieddate",
+            )
 
         return cls(
             hubspot_token=hubspot_token,
@@ -170,6 +187,7 @@ class Settings:
             hubspot_require_p2p_partner=hubspot_require_p2p_partner,
             hubspot_p2p_partner_filter_values=hubspot_p2p_partner_filter_values,
             form_signed_carry_usd_per_day=form_signed_carry_usd_per_day,
+            hubspot_last_activity_properties=hubspot_last_activity_properties,
         )
 
     def date_entered_form_prop(self, stage_id: str) -> str:

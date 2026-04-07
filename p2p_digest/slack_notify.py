@@ -3,12 +3,14 @@ from __future__ import annotations
 import httpx
 
 from p2p_digest.config import Settings
+from p2p_digest.format_slack import SLACK_DIGEST_HEADER_TITLE
 
 SLACK_API = "https://slack.com/api"
 
 
 def post_slack_webhook(webhook_url: str, text: str) -> None:
-    payload = {"text": text}
+    # Webhooks: no header block for multi-chunk bodies; use bold mrkdwn title line.
+    payload = {"text": f"*{SLACK_DIGEST_HEADER_TITLE}*\n\n{text}"}
     with httpx.Client(timeout=30.0) as client:
         r = client.post(webhook_url, json=payload)
         r.raise_for_status()
@@ -44,16 +46,35 @@ def post_slack_chat_api(bot_token: str, channel_id: str, text: str) -> None:
     }
     chunks = _chunk_mrkdwn(text)
     with httpx.Client(timeout=120.0) as client:
-        for start in range(0, len(chunks), SLACK_MAX_BLOCKS_PER_MESSAGE):
-            batch = chunks[start : start + SLACK_MAX_BLOCKS_PER_MESSAGE]
-            if start > 0:
+        pos = 0
+        part_index = 0
+        while pos < len(chunks):
+            # First post includes a header block → max 49 mrkdwn sections (Slack limit 50 blocks).
+            cap = (SLACK_MAX_BLOCKS_PER_MESSAGE - 1) if part_index == 0 else SLACK_MAX_BLOCKS_PER_MESSAGE
+            batch = chunks[pos : pos + cap]
+            pos += len(batch)
+            if part_index > 0:
                 batch = [
-                    f"_…continued ({start // SLACK_MAX_BLOCKS_PER_MESSAGE + 1})…_\n\n{batch[0]}"
+                    f"_…continued ({part_index + 1})…_\n\n{batch[0]}"
                 ] + batch[1:]
             blocks: list[dict] = []
+            if part_index == 0:
+                blocks.append(
+                    {
+                        "type": "header",
+                        "text": {
+                            "type": "plain_text",
+                            "text": SLACK_DIGEST_HEADER_TITLE,
+                            "emoji": True,
+                        },
+                    }
+                )
             for part in batch:
                 blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": part}})
-            preview = text[:3000] if start == 0 else f"(continued) {batch[0][:2900]}"
+            if part_index == 0:
+                preview = f"{SLACK_DIGEST_HEADER_TITLE}\n{text}"[:3000]
+            else:
+                preview = f"(continued) {batch[0][:2900]}"
             body = {"channel": channel_id, "text": preview, "blocks": blocks}
             r = client.post(f"{SLACK_API}/chat.postMessage", headers=headers, json=body)
             r.raise_for_status()
@@ -62,6 +83,7 @@ def post_slack_chat_api(bot_token: str, channel_id: str, text: str) -> None:
                 raise RuntimeError(
                     f"Slack API error: {data.get('error', 'unknown')} (needed scopes often: chat:write)"
                 )
+            part_index += 1
 
 
 def post_slack(settings: Settings, text: str) -> None:

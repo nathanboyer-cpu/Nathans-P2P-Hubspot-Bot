@@ -147,5 +147,6 @@ def deal_properties_for_run(settings: Settings, form_stage_id: str, integ_stage_
         settings.date_entered_integration_prop(integ_stage_id),
         f"hs_v2_date_entered_{form_stage_id}",
         f"hs_v2_date_entered_{integ_stage_id}",
+        *settings.hubspot_last_activity_properties,
     }
-    return sorted(props)
+    return sorted(set(props))

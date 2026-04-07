@@ -77,9 +77,8 @@ def main() -> int:
             return 1
         ts = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
         text = (
-            f"*P2P HubSpot digest bot — connectivity test*\n"
-            f"If you see this in `#hubspot-signed-integrating-tracker`, Slack delivery works.\n"
-            f"_Sent at {ts}_"
+            f"_Connectivity test._ If you see this in `#hubspot-signed-integrating-tracker`, "
+            f"Slack delivery works.\n_Sent at {ts}_"
         )
         try:
             post_slack(settings, text)
@@ -147,6 +146,7 @@ def main() -> int:
         funnel_start_mode=settings.hubspot_funnel_start,
         carry_usd_per_day=settings.form_signed_carry_usd_per_day,
         include_form_signed_deal_breakdown=(scope == "form_signed_column"),
+        last_activity_property_names=settings.hubspot_last_activity_properties,
     )
     payload = metrics_to_dict(digest)
     payload["deal_scope_mode"] = scope
