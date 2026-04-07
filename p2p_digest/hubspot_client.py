@@ -145,5 +145,7 @@ def deal_properties_for_run(settings: Settings, form_stage_id: str, integ_stage_
         settings.demand_partner_property,
         settings.date_entered_form_prop(form_stage_id),
         settings.date_entered_integration_prop(integ_stage_id),
+        f"hs_v2_date_entered_{form_stage_id}",
+        f"hs_v2_date_entered_{integ_stage_id}",
     }
     return sorted(props)

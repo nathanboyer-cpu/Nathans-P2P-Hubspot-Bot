@@ -3,6 +3,17 @@ from __future__ import annotations
 from typing import Any
 
 
+def _slack_plain(text: str, max_len: int = 100) -> str:
+    s = str(text).replace("&", "and").replace("<", "").replace(">", "")
+    if len(s) > max_len:
+        return s[: max_len - 1] + "…"
+    return s
+
+
+def _fmt_usd(n: int) -> str:
+    return f"${n:,}"
+
+
 def _fmt_num(x: Any) -> str:
     if x is None:
         return "n/a"
@@ -75,8 +86,14 @@ def build_slack_message(summary: str | None, metrics: dict[str, Any]) -> str:
     )
     lines.append("")
     by_p = metrics.get("by_partner") or {}
+    deal_lines = metrics.get("deal_lines_by_partner") or {}
+    rate = float(metrics.get("carry_usd_per_day") or 1000)
     if deal_scope == "form_signed_column":
         lines.append("*By P2P Partner* (deals currently in Form signed)")
+        lines.append(
+            f"_Per deal: reference date = Form signed entered when HubSpot has it, else deal created. "
+            f"Days = time in this column (now − reference). Est. carry = days × {_fmt_usd(int(rate))}/day._"
+        )
         prow: list[tuple[str, int, str]] = []
         for name, b in by_p.items():
             if not isinstance(b, dict):
@@ -89,7 +106,32 @@ def build_slack_message(summary: str | None, metrics: dict[str, Any]) -> str:
             )
         prow.sort(key=lambda t: (-t[1], t[0]))
         for name, n, avg_c in prow[:40]:
-            lines.append(f"• {name}: {n} deals | avg days created→now {avg_c}")
+            lines.append(f"• *{_slack_plain(name, 80)}* — {n} deals | avg days created→now {avg_c}")
+            rows = deal_lines.get(name) if isinstance(deal_lines, dict) else None
+            if isinstance(rows, list) and rows:
+                sub = sum(int(r.get("carry_estimate_usd") or 0) for r in rows)
+                for r in rows:
+                    if not isinstance(r, dict):
+                        continue
+                    dn = _slack_plain(str(r.get("dealname") or ""), 90)
+                    dref = r.get("reference_date_utc") or "n/a"
+                    dlbl = str(r.get("reference_label") or "")
+                    dd = r.get("days_in_form_signed")
+                    dc = int(r.get("carry_estimate_usd") or 0)
+                    lines.append(
+                        f"    ◦ `{dn}` — {dref} ({dlbl}) | {dd} d in column | est. {_fmt_usd(dc)}"
+                    )
+                lines.append(f"    _Partner subtotal (est. carry): {_fmt_usd(sub)}_")
+        if isinstance(deal_lines, dict):
+            grand = sum(
+                int(r.get("carry_estimate_usd") or 0)
+                for rows in deal_lines.values()
+                if isinstance(rows, list)
+                for r in rows
+                if isinstance(r, dict)
+            )
+            if grand:
+                lines.append(f"*Total est. carry (Form signed, all listed deals):* {_fmt_usd(grand)}")
         lines.append("")
     lines.append(f"*Avg days {span_lbl} by P2P Partner* (completed deals only)")
     rows: list[tuple[str, int, str]] = []
