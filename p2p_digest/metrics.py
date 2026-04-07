@@ -29,17 +29,50 @@ CANONICAL_PARTNERS: tuple[str, ...] = (
     "Yieldmo",
 )
 
+# HubSpot `p2p_partner` enumeration *stored values* (API) -> report bucket (see Settings → Properties)
+HUBSPOT_P2P_STORED_VALUE_TO_CANONICAL: dict[str, str] = {
+    "appstock": "Appstock",
+    "boldwin": "Boldwin",
+    "brave": "Brave",
+    "criteo": "Criteo",
+    "iion": "Iion",
+    "illumin": "Illumin",
+    "index": "Index Exchange",
+    "limpid": "Limpid",
+    "magnite": "Magnite",
+    "media.net": "Media Net",
+    "minimob/adspin": "Adspin/Mini mob",
+    "nexxen": "Nexxen",
+    "pubmatic": "Pubmatic",
+    "se7en": "Se7en",
+    "sovrn": "Sovrn",
+    "thunder monetize": "Thunder Monetize",
+    "triplelift": "Triplelift",
+}
 
-def _parse_hubspot_ms(value: Any) -> datetime | None:
+
+def _parse_hubspot_time(value: Any) -> datetime | None:
+    """HubSpot search often returns dates as ISO8601 strings; batch/read may use epoch ms."""
     if value is None or value == "":
         return None
+    s = str(value).strip()
+    if not s:
+        return None
     try:
-        ms = int(str(value))
+        ms = int(float(s))
+        if ms <= 0:
+            return None
+        return datetime.fromtimestamp(ms / 1000.0, tz=timezone.utc)
+    except (TypeError, ValueError):
+        pass
+    try:
+        iso = s.replace("Z", "+00:00") if s.endswith("Z") else s
+        dt = datetime.fromisoformat(iso)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt.astimezone(timezone.utc)
     except (TypeError, ValueError):
         return None
-    if ms <= 0:
-        return None
-    return datetime.fromtimestamp(ms / 1000.0, tz=timezone.utc)
 
 
 def _days_between(start: datetime | None, end: datetime | None) -> float | None:
@@ -57,6 +90,8 @@ def normalize_partner(raw: str | None) -> str:
     if not s:
         return "Other / blank"
     low = s.lower()
+    if low in HUBSPOT_P2P_STORED_VALUE_TO_CANONICAL:
+        return HUBSPOT_P2P_STORED_VALUE_TO_CANONICAL[low]
     for p in CANONICAL_PARTNERS:
         if p.lower() == low:
             return p
@@ -77,6 +112,8 @@ class DigestMetrics:
     form_stage_id: str
     integration_stage_id: str
     demand_partner_property: str
+    hubspot_crm_view_id: str
+    dealstage_filter_ids: tuple[str, ...]
     total_deals_in_pipeline: int
     deals_reached_form_signed: int
     deals_reached_integration: int
@@ -87,6 +124,7 @@ class DigestMetrics:
     by_partner: dict[str, dict[str, Any]]
     nexxen: dict[str, Any]
     non_nexxen: dict[str, Any]
+    funnel_start_mode: str
 
 
 def _bucket_summary(b: PartnerBucket) -> dict[str, Any]:
@@ -115,6 +153,10 @@ def compute_metrics(
     demand_partner_property: str,
     date_entered_form_prop: str,
     date_entered_integration_prop: str,
+    *,
+    hubspot_crm_view_id: str = "",
+    dealstage_filter_ids: tuple[str, ...] = (),
+    funnel_start_mode: str = "form_signed",
 ) -> DigestMetrics:
     now = datetime.now(timezone.utc)
 
@@ -133,9 +175,11 @@ def compute_metrics(
 
     for d in deals:
         props = d.get("properties") or {}
-        created = _parse_hubspot_ms(props.get("createdate"))
-        t_form = _parse_hubspot_ms(props.get(date_entered_form_prop))
-        t_int = _parse_hubspot_ms(props.get(date_entered_integration_prop))
+        created = _parse_hubspot_time(props.get("createdate"))
+        if created is None:
+            created = _parse_hubspot_time(props.get("hs_createdate"))
+        t_form = _parse_hubspot_time(props.get(date_entered_form_prop))
+        t_int = _parse_hubspot_time(props.get(date_entered_integration_prop))
 
         partner_raw = props.get(demand_partner_property)
         partner = normalize_partner(partner_raw)
@@ -159,8 +203,9 @@ def compute_metrics(
         if t_int is not None:
             reached_int += 1
 
-        if t_form is not None and t_int is not None:
-            span = _days_between(t_form, t_int)
+        t_funnel_start = created if funnel_start_mode == "created" else t_form
+        if t_funnel_start is not None and t_int is not None:
+            span = _days_between(t_funnel_start, t_int)
             if span is not None:
                 b.completed_form_to_integration_days.append(span)
                 all_form_to_int_completed.append(span)
@@ -192,6 +237,8 @@ def compute_metrics(
         form_stage_id=form_stage_id,
         integration_stage_id=integration_stage_id,
         demand_partner_property=demand_partner_property,
+        hubspot_crm_view_id=hubspot_crm_view_id,
+        dealstage_filter_ids=dealstage_filter_ids,
         total_deals_in_pipeline=len(deals),
         deals_reached_form_signed=reached_form,
         deals_reached_integration=reached_int,
@@ -202,6 +249,7 @@ def compute_metrics(
         by_partner=by_partner,
         nexxen=_bucket_summary(nexxen_b),
         non_nexxen=_bucket_summary(non_nexxen_b),
+        funnel_start_mode=funnel_start_mode,
     )
 
 
@@ -212,6 +260,9 @@ def metrics_to_dict(m: DigestMetrics) -> dict[str, Any]:
         "form_stage_id": m.form_stage_id,
         "integration_stage_id": m.integration_stage_id,
         "demand_partner_property": m.demand_partner_property,
+        "hubspot_crm_view_id": m.hubspot_crm_view_id,
+        "dealstage_filter_ids": list(m.dealstage_filter_ids),
+        "funnel_start_mode": m.funnel_start_mode,
         "total_deals_in_pipeline": m.total_deals_in_pipeline,
         "deals_reached_form_signed": m.deals_reached_form_signed,
         "deals_reached_integration": m.deals_reached_integration,

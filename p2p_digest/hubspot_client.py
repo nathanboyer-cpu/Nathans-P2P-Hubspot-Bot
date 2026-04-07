@@ -69,23 +69,42 @@ class HubSpotClient:
         self,
         pipeline_id: str,
         properties: list[str],
+        *,
+        dealstage_ids: tuple[str, ...] = (),
+        dealstage_eq: str | None = None,
+        extra_filters: list[dict[str, object]] | None = None,
     ) -> list[dict[str, Any]]:
-        """Paginated CRM search for deals in a pipeline."""
+        """Paginated CRM search for deals in a pipeline (optional stage scope)."""
+        filters: list[dict[str, object]] = [
+            {
+                "propertyName": "pipeline",
+                "operator": "EQ",
+                "value": pipeline_id,
+            }
+        ]
+        if dealstage_eq:
+            filters.append(
+                {
+                    "propertyName": "dealstage",
+                    "operator": "EQ",
+                    "value": dealstage_eq,
+                }
+            )
+        elif dealstage_ids:
+            filters.append(
+                {
+                    "propertyName": "dealstage",
+                    "operator": "IN",
+                    "values": list(dealstage_ids),
+                }
+            )
+        if extra_filters:
+            filters.extend(extra_filters)
         out: list[dict[str, Any]] = []
         after: str | None = None
         while True:
             body: dict[str, Any] = {
-                "filterGroups": [
-                    {
-                        "filters": [
-                            {
-                                "propertyName": "pipeline",
-                                "operator": "EQ",
-                                "value": pipeline_id,
-                            }
-                        ]
-                    }
-                ],
+                "filterGroups": [{"filters": filters}],
                 "properties": properties,
                 "limit": 100,
             }
@@ -120,6 +139,7 @@ def deal_properties_for_run(settings: Settings, form_stage_id: str, integ_stage_
         "dealstage",
         "pipeline",
         "createdate",
+        "hs_createdate",
         "closedate",
         "hs_is_closed",
         settings.demand_partner_property,

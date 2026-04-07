@@ -3,13 +3,41 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from datetime import datetime, timezone
 
 from p2p_digest.config import Settings
 from p2p_digest.format_slack import build_slack_message
 from p2p_digest.hubspot_client import HubSpotClient, deal_properties_for_run, resolved_pipeline_and_stages
 from p2p_digest.metrics import compute_metrics, metrics_to_dict
-from p2p_digest.slack_notify import post_slack_webhook
+from p2p_digest.slack_notify import post_slack
 from p2p_digest.summarize import summarize_digest
+
+
+def _hubspot_partner_filters(settings: Settings) -> list[dict[str, object]]:
+    """Optional search filters on the P2P partner property."""
+    prop = settings.demand_partner_property
+    out: list[dict[str, object]] = []
+    if settings.hubspot_require_p2p_partner:
+        out.append({"propertyName": prop, "operator": "HAS_PROPERTY"})
+    if settings.hubspot_p2p_partner_filter_values:
+        out.append(
+            {
+                "propertyName": prop,
+                "operator": "IN",
+                "values": list(settings.hubspot_p2p_partner_filter_values),
+            }
+        )
+    return out
+
+
+def _search_extra_filters(settings: Settings) -> list[dict[str, object]]:
+    return list(settings.hubspot_extra_filters) + _hubspot_partner_filters(settings)
+
+
+def _slack_configured(settings: Settings) -> bool:
+    return bool(settings.slack_webhook_url) or bool(
+        settings.slack_bot_token and settings.slack_channel_id
+    )
 
 
 def main() -> int:
@@ -24,7 +52,42 @@ def main() -> int:
         action="store_true",
         help="Skip Claude; post structured snapshot only (requires Slack unless --dry-run).",
     )
+    parser.add_argument(
+        "--test-slack",
+        action="store_true",
+        help="Post a short test message to Slack only (no HubSpot or Claude).",
+    )
     args = parser.parse_args()
+
+    if args.test_slack and args.dry_run:
+        print("Do not combine --test-slack with --dry-run.", file=sys.stderr)
+        return 1
+
+    if args.test_slack:
+        try:
+            settings = Settings.load(require_hubspot_token=False)
+        except ValueError as e:
+            print(str(e), file=sys.stderr)
+            return 1
+        if not _slack_configured(settings):
+            print(
+                "Configure SLACK_WEBHOOK_URL or SLACK_BOT_TOKEN + SLACK_CHANNEL_ID for --test-slack.",
+                file=sys.stderr,
+            )
+            return 1
+        ts = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+        text = (
+            f"*P2P HubSpot digest bot — connectivity test*\n"
+            f"If you see this in `#hubspot-signed-integrating-tracker`, Slack delivery works.\n"
+            f"_Sent at {ts}_"
+        )
+        try:
+            post_slack(settings, text)
+        except Exception as e:
+            print(f"Slack post failed: {e}", file=sys.stderr)
+            return 1
+        print("Posted test message to Slack.", file=sys.stderr)
+        return 0
 
     try:
         settings = Settings.load()
@@ -40,8 +103,31 @@ def main() -> int:
 
     props = deal_properties_for_run(settings, form_id, integ_id)
     client = HubSpotClient(settings)
+    scope = settings.hubspot_deal_scope
     try:
-        deals = client.search_deals_in_pipeline(pipeline_id, props)
+        if scope == "form_signed_column":
+            deals = client.search_deals_in_pipeline(
+                pipeline_id,
+                props,
+                dealstage_eq=form_id,
+                extra_filters=_search_extra_filters(settings),
+            )
+            stage_scope: tuple[str, ...] = (form_id,)
+        elif scope == "entire_pipeline":
+            deals = client.search_deals_in_pipeline(
+                pipeline_id,
+                props,
+                extra_filters=_search_extra_filters(settings),
+            )
+            stage_scope = ()
+        else:
+            deals = client.search_deals_in_pipeline(
+                pipeline_id,
+                props,
+                dealstage_ids=settings.hubspot_dealstage_ids,
+                extra_filters=_search_extra_filters(settings),
+            )
+            stage_scope = settings.hubspot_dealstage_ids
     except Exception as e:
         print(f"HubSpot search failed: {e}", file=sys.stderr)
         return 1
@@ -56,15 +142,23 @@ def main() -> int:
         settings.demand_partner_property,
         date_form,
         date_int,
+        hubspot_crm_view_id=settings.hubspot_crm_view_id,
+        dealstage_filter_ids=stage_scope,
+        funnel_start_mode=settings.hubspot_funnel_start,
     )
     payload = metrics_to_dict(digest)
+    payload["deal_scope_mode"] = scope
 
     if args.dry_run:
         print(json.dumps(payload, indent=2))
         return 0
 
-    if not settings.slack_webhook_url:
-        print("SLACK_WEBHOOK_URL is required unless --dry-run.", file=sys.stderr)
+    if not _slack_configured(settings):
+        print(
+            "Configure Slack: SLACK_WEBHOOK_URL, or SLACK_BOT_TOKEN + SLACK_CHANNEL_ID "
+            "(unless --dry-run).",
+            file=sys.stderr,
+        )
         return 1
 
     summary: str | None = None
@@ -80,7 +174,7 @@ def main() -> int:
 
     text = build_slack_message(summary, payload)
     try:
-        post_slack_webhook(settings.slack_webhook_url, text)
+        post_slack(settings, text)
     except Exception as e:
         print(f"Slack post failed: {e}", file=sys.stderr)
         return 1
