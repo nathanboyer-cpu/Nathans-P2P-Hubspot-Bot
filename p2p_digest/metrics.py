@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import statistics
-from collections import defaultdict
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
@@ -76,18 +75,6 @@ def _parse_hubspot_time(value: Any) -> datetime | None:
         return None
 
 
-def _stage_entered_time(
-    props: dict[str, Any],
-    stage_id: str,
-    date_entered_prop: str,
-) -> datetime | None:
-    """Prefer HubSpot v2 stage-entry timestamps (many portals only populate these)."""
-    t = _parse_hubspot_time(props.get(f"hs_v2_date_entered_{stage_id}"))
-    if t is not None:
-        return t
-    return _parse_hubspot_time(props.get(date_entered_prop))
-
-
 def _days_between(start: datetime | None, end: datetime | None) -> float | None:
     if start is None or end is None:
         return None
@@ -138,8 +125,6 @@ class DigestMetrics:
     nexxen: dict[str, Any]
     non_nexxen: dict[str, Any]
     funnel_start_mode: str
-    deal_lines_by_partner: dict[str, list[dict[str, Any]]]
-    carry_usd_per_day: float
 
 
 def _bucket_summary(b: PartnerBucket) -> dict[str, Any]:
@@ -172,11 +157,8 @@ def compute_metrics(
     hubspot_crm_view_id: str = "",
     dealstage_filter_ids: tuple[str, ...] = (),
     funnel_start_mode: str = "form_signed",
-    carry_usd_per_day: float = 1000.0,
-    include_form_signed_deal_breakdown: bool = False,
 ) -> DigestMetrics:
     now = datetime.now(timezone.utc)
-    deal_lines_by_partner: dict[str, list[dict[str, Any]]] = defaultdict(list)
 
     buckets: dict[str, PartnerBucket] = {
         **{p: PartnerBucket() for p in CANONICAL_PARTNERS},
@@ -196,8 +178,8 @@ def compute_metrics(
         created = _parse_hubspot_time(props.get("createdate"))
         if created is None:
             created = _parse_hubspot_time(props.get("hs_createdate"))
-        t_form = _stage_entered_time(props, form_stage_id, date_entered_form_prop)
-        t_int = _stage_entered_time(props, integration_stage_id, date_entered_integration_prop)
+        t_form = _parse_hubspot_time(props.get(date_entered_form_prop))
+        t_int = _parse_hubspot_time(props.get(date_entered_integration_prop))
 
         partner_raw = props.get(demand_partner_property)
         partner = normalize_partner(partner_raw)
@@ -232,24 +214,6 @@ def compute_metrics(
 
         (nexxen_b if partner == "Nexxen" else non_nexxen_b).deal_count += 1
 
-        if include_form_signed_deal_breakdown:
-            ref = t_form if t_form is not None else created
-            ref_label = "Form signed entered" if t_form is not None else "Deal created (fallback)"
-            if ref is not None:
-                days_in = _days_between(ref, now)
-                if days_in is not None:
-                    carry = int(round(days_in * carry_usd_per_day))
-                    deal_lines_by_partner[partner].append(
-                        {
-                            "deal_id": str(d.get("id", "") or ""),
-                            "dealname": str(props.get("dealname") or "Untitled deal"),
-                            "reference_date_utc": ref.date().isoformat(),
-                            "reference_label": ref_label,
-                            "days_in_form_signed": round(days_in, 1),
-                            "carry_estimate_usd": carry,
-                        }
-                    )
-
     def overall_avg_med(vals: list[float]) -> tuple[float | None, float | None]:
         if not vals:
             return None, None
@@ -266,15 +230,6 @@ def compute_metrics(
         if k in by_partner:
             continue
         by_partner[k] = _bucket_summary(v)
-
-    lines_sorted: dict[str, list[dict[str, Any]]] = {}
-    if include_form_signed_deal_breakdown:
-        for pname, rows in deal_lines_by_partner.items():
-            if not rows:
-                continue
-            lines_sorted[pname] = sorted(
-                rows, key=lambda r: (-float(r["days_in_form_signed"]), r["dealname"])
-            )
 
     return DigestMetrics(
         generated_at_utc=now.isoformat(),
@@ -295,8 +250,6 @@ def compute_metrics(
         nexxen=_bucket_summary(nexxen_b),
         non_nexxen=_bucket_summary(non_nexxen_b),
         funnel_start_mode=funnel_start_mode,
-        deal_lines_by_partner=lines_sorted,
-        carry_usd_per_day=carry_usd_per_day,
     )
 
 
@@ -322,6 +275,4 @@ def metrics_to_dict(m: DigestMetrics) -> dict[str, Any]:
         "by_partner": m.by_partner,
         "nexxen_bucket": m.nexxen,
         "non_nexxen_bucket": m.non_nexxen,
-        "deal_lines_by_partner": m.deal_lines_by_partner,
-        "carry_usd_per_day": m.carry_usd_per_day,
     }
