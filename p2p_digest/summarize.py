@@ -24,7 +24,9 @@ def summarize_digest(settings: Settings, metrics: dict[str, Any]) -> str:
     if scope == "form_signed_column":
         scope_note = (
             "The dataset is scoped to deals currently in the Form signed stage only. "
-            "Partner splits use the P2P Partner deal property (see demand_partner_property in JSON); mention counts and age. "
+            "Partner splits use the P2P Partner deal property (see demand_partner_property in JSON). "
+            "deal_lines_by_partner lists each deal with days_in_form_signed, carry_estimate_usd ($/day from carry_usd_per_day), "
+            "and sla_emoji (🟢/🟡/🔴/⚪ by hours in Form signed). Mention high carry partners and red deals. "
         )
     mode = (metrics.get("funnel_start_mode") or "form_signed").lower()
     if mode == "created":

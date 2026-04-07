@@ -145,6 +145,8 @@ def main() -> int:
         hubspot_crm_view_id=settings.hubspot_crm_view_id,
         dealstage_filter_ids=stage_scope,
         funnel_start_mode=settings.hubspot_funnel_start,
+        carry_usd_per_day=settings.form_signed_carry_usd_per_day,
+        include_form_signed_deal_breakdown=(scope == "form_signed_column"),
     )
     payload = metrics_to_dict(digest)
     payload["deal_scope_mode"] = scope

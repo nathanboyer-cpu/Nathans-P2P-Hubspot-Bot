@@ -3,6 +3,24 @@ from __future__ import annotations
 from typing import Any
 
 
+def _slack_plain(text: str, max_len: int = 100) -> str:
+    s = (
+        str(text)
+        .replace("&", "and")
+        .replace("<", "")
+        .replace(">", "")
+        .replace("`", "'")
+        .replace("*", "·")
+    )
+    if len(s) > max_len:
+        return s[: max_len - 1] + "…"
+    return s
+
+
+def _fmt_usd(n: int) -> str:
+    return f"${n:,}"
+
+
 def _fmt_num(x: Any) -> str:
     if x is None:
         return "n/a"
@@ -75,8 +93,16 @@ def build_slack_message(summary: str | None, metrics: dict[str, Any]) -> str:
     )
     lines.append("")
     by_p = metrics.get("by_partner") or {}
-    if deal_scope == "form_signed_column":
+    deal_lines = metrics.get("deal_lines_by_partner") or {}
+    rate = float(metrics.get("carry_usd_per_day") or 1000)
+
+    if deal_scope == "form_signed_column" and isinstance(deal_lines, dict) and deal_lines:
         lines.append("*By P2P Partner* (deals currently in Form signed)")
+        lines.append(
+            f"_Per deal: reference = Form signed entered when HubSpot has it, else deal created. "
+            f"Days = time in this column. Est. carry = days × {_fmt_usd(int(rate))}/day. "
+            f"Emoji = hours in Form signed: 🟢 under 24h, 🟡 24–48h, 🔴 over 48h, ⚪ unknown._"
+        )
         prow: list[tuple[str, int, str]] = []
         for name, b in by_p.items():
             if not isinstance(b, dict):
@@ -84,13 +110,67 @@ def build_slack_message(summary: str | None, metrics: dict[str, Any]) -> str:
             n = int(b.get("deal_count") or 0)
             if n == 0:
                 continue
-            prow.append(
-                (name, n, _fmt_num(b.get("avg_days_created_to_now")))
+            prow.append((name, n, _fmt_num(b.get("avg_days_created_to_now"))))
+        prow.sort(key=lambda t: (-t[1], t[0]))
+        for name, n, avg_c in prow[:40]:
+            lines.append(f"• *{_slack_plain(name, 80)}* — {n} deals | avg days created→now {avg_c}")
+            if name == "Nexxen":
+                lines.append(
+                    "_N.B. Note: Nexxen clients sign up directly with Nexxen and have an extended timeline._"
+                )
+            rows = deal_lines.get(name) if isinstance(deal_lines, dict) else None
+            if isinstance(rows, list) and rows:
+                sub = sum(int(r.get("carry_estimate_usd") or 0) for r in rows if isinstance(r, dict))
+                for r in rows:
+                    if not isinstance(r, dict):
+                        continue
+                    em = str(r.get("sla_emoji") or "⚪")
+                    dn = _slack_plain(str(r.get("dealname") or ""), 90)
+                    dref = r.get("reference_date_utc") or "n/a"
+                    dlbl = str(r.get("reference_label") or "")
+                    dd = r.get("days_in_form_signed")
+                    dc = int(r.get("carry_estimate_usd") or 0)
+                    lines.append(
+                        f"    ◦ {em} *{dn}* — {dref} ({dlbl}) | {dd} d in column | est. {_fmt_usd(dc)}"
+                    )
+                lines.append(f"    _Partner subtotal (est. carry): {_fmt_usd(sub)}_")
+        grand_all = sum(
+            int(r.get("carry_estimate_usd") or 0)
+            for rows in deal_lines.values()
+            if isinstance(rows, list)
+            for r in rows
+            if isinstance(r, dict)
+        )
+        rows_nx = deal_lines.get("Nexxen") if isinstance(deal_lines, dict) else None
+        grand_nexxen = (
+            sum(int(r.get("carry_estimate_usd") or 0) for r in rows_nx if isinstance(r, dict))
+            if isinstance(rows_nx, list)
+            else 0
+        )
+        grand_excl_nexxen = grand_all - grand_nexxen
+        if grand_all:
+            lines.append(
+                f"*Total est. carry (Form signed, all partners including Nexxen):* {_fmt_usd(grand_all)}"
             )
+            lines.append(
+                f"*Total est. carry (Form signed, excluding Nexxen):* {_fmt_usd(grand_excl_nexxen)}"
+            )
+        lines.append("")
+    elif deal_scope == "form_signed_column":
+        lines.append("*By P2P Partner* (deals currently in Form signed)")
+        prow = []
+        for name, b in by_p.items():
+            if not isinstance(b, dict):
+                continue
+            n = int(b.get("deal_count") or 0)
+            if n == 0:
+                continue
+            prow.append((name, n, _fmt_num(b.get("avg_days_created_to_now"))))
         prow.sort(key=lambda t: (-t[1], t[0]))
         for name, n, avg_c in prow[:40]:
             lines.append(f"• {name}: {n} deals | avg days created→now {avg_c}")
         lines.append("")
+
     lines.append(f"*Avg days {span_lbl} by P2P Partner* (completed deals only)")
     rows: list[tuple[str, int, str]] = []
     for name, b in by_p.items():
@@ -104,5 +184,7 @@ def build_slack_message(summary: str | None, metrics: dict[str, Any]) -> str:
     for name, n, avg in rows[:40]:
         lines.append(f"• {name}: {avg} d (n={n})")
     if deal_scope == "form_signed_column" and not rows:
-        lines.append("_No deals in this batch have reached Integration yet (expected while scoped to Form signed)._")
+        lines.append(
+            "_No deals in this batch have reached Integration yet (expected while scoped to Form signed)._"
+        )
     return "\n".join(lines)

@@ -33,24 +33,35 @@ def _chunk_mrkdwn(text: str, max_len: int = 2900) -> list[str]:
     return [c for c in chunks if c]
 
 
+SLACK_MAX_BLOCKS_PER_MESSAGE = 50
+
+
 def post_slack_chat_api(bot_token: str, channel_id: str, text: str) -> None:
     """Post a mrkdwn message via chat.postMessage (Bot User OAuth token xoxb-...)."""
     headers = {
         "Authorization": f"Bearer {bot_token}",
         "Content-Type": "application/json; charset=utf-8",
     }
-    blocks: list[dict] = []
-    for part in _chunk_mrkdwn(text):
-        blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": part}})
-    body = {"channel": channel_id, "text": text[:3000], "blocks": blocks}
-    with httpx.Client(timeout=30.0) as client:
-        r = client.post(f"{SLACK_API}/chat.postMessage", headers=headers, json=body)
-        r.raise_for_status()
-        data = r.json()
-    if not data.get("ok"):
-        raise RuntimeError(
-            f"Slack API error: {data.get('error', 'unknown')} (needed scopes often: chat:write)"
-        )
+    chunks = _chunk_mrkdwn(text)
+    with httpx.Client(timeout=120.0) as client:
+        for start in range(0, len(chunks), SLACK_MAX_BLOCKS_PER_MESSAGE):
+            batch = chunks[start : start + SLACK_MAX_BLOCKS_PER_MESSAGE]
+            if start > 0:
+                batch = [
+                    f"_…continued ({start // SLACK_MAX_BLOCKS_PER_MESSAGE + 1})…_\n\n{batch[0]}"
+                ] + batch[1:]
+            blocks: list[dict] = []
+            for part in batch:
+                blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": part}})
+            preview = text[:3000] if start == 0 else f"(continued) {batch[0][:2900]}"
+            body = {"channel": channel_id, "text": preview, "blocks": blocks}
+            r = client.post(f"{SLACK_API}/chat.postMessage", headers=headers, json=body)
+            r.raise_for_status()
+            data = r.json()
+            if not data.get("ok"):
+                raise RuntimeError(
+                    f"Slack API error: {data.get('error', 'unknown')} (needed scopes often: chat:write)"
+                )
 
 
 def post_slack(settings: Settings, text: str) -> None:

@@ -43,6 +43,13 @@ def _truthy_env(raw: str) -> bool:
     return raw.strip().lower() in ("1", "true", "yes", "on")
 
 
+def _parse_float_opt(raw: str, default: float) -> float:
+    s = (raw or "").strip()
+    if not s:
+        return default
+    return float(s)
+
+
 def _parse_extra_filters_json(raw: str) -> list[dict[str, object]]:
     if not raw.strip():
         return []
@@ -83,6 +90,7 @@ class Settings:
     hubspot_deal_scope: str
     hubspot_require_p2p_partner: bool
     hubspot_p2p_partner_filter_values: tuple[str, ...]
+    form_signed_carry_usd_per_day: float
 
     @classmethod
     def load(cls, *, require_hubspot_token: bool = True) -> Settings:
@@ -132,6 +140,9 @@ class Settings:
         hubspot_p2p_partner_filter_values = _parse_csv_trimmed(
             _opt("HUBSPOT_P2P_PARTNER_VALUES", "")
         )
+        form_signed_carry_usd_per_day = _parse_float_opt(
+            _opt("FORM_SIGNED_CARRY_USD_PER_DAY", ""), 1000.0
+        )
 
         return cls(
             hubspot_token=hubspot_token,
@@ -158,6 +169,7 @@ class Settings:
             hubspot_deal_scope=hubspot_deal_scope,
             hubspot_require_p2p_partner=hubspot_require_p2p_partner,
             hubspot_p2p_partner_filter_values=hubspot_p2p_partner_filter_values,
+            form_signed_carry_usd_per_day=form_signed_carry_usd_per_day,
         )
 
     def date_entered_form_prop(self, stage_id: str) -> str:
