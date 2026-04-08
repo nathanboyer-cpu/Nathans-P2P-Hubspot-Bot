@@ -10,10 +10,11 @@
 	</array>
 	<key>WorkingDirectory</key>
 	<string>/Users/nathanboyer/Documents/NathanProjects/Nathans P2P Hubspot Bot</string>
+	<!-- Wall-clock time on THIS Mac (not UTC). London BST: Hour 10 = 09:00 UTC. London GMT: Hour 9 = 09:00 UTC. -->
 	<key>StartCalendarInterval</key>
 	<dict>
 		<key>Hour</key>
-		<integer>9</integer>
+		<integer>10</integer>
 		<key>Minute</key>
 		<integer>0</integer>
 	</dict>
