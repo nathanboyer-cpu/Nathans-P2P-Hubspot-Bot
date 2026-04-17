@@ -1,0 +1,61 @@
+# Runs the same digest as locally: HubSpot → Claude → Slack.
+# Cron is UTC (https://docs.github.com/en/actions/using-workflows/events-that-trigger-workflows#schedule).
+name: Daily HubSpot digest to Slack
+
+on:
+  schedule:
+    - cron: "0 9 * * *" # 09:00 UTC daily
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: p2p-hubspot-digest
+  cancel-in-progress: true
+
+jobs:
+  digest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      # One repository secret holds the same key=value lines as local .env (never commit .env).
+      # The runner is ephemeral; .env is removed in the final step.
+      - name: Write .env from secret
+        env:
+          DIGEST_DOTENV: ${{ secrets.DIGEST_DOTENV }}
+        run: |
+          set -euo pipefail
+          python3 <<'PY'
+          import os, pathlib, sys
+
+          raw = os.environ.get("DIGEST_DOTENV", "")
+          if not raw.strip():
+              print(
+                  "Missing or empty repository secret DIGEST_DOTENV. "
+                  "GitHub → Settings → Secrets and variables → Actions → New repository secret. "
+                  "Paste the full contents of your local .env (same as .env.example keys).",
+                  file=sys.stderr,
+              )
+              sys.exit(1)
+          p = pathlib.Path(".env")
+          p.write_text(raw, encoding="utf-8")
+          p.chmod(0o600)
+          PY
+
+      - name: Run digest
+        run: python -m p2p_digest.main
+
+      - name: Remove .env
+        if: always()
+        run: rm -f .env

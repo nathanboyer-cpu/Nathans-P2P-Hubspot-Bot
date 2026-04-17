@@ -12,9 +12,12 @@ For 09:00 UTC from the UK:
   • During GMT (winter): use Hour 9 (09:00 GMT = 09:00 UTC).
   • Or set the Mac time zone to UTC and keep Hour 9 for 09:00 UTC year-round.
 
-For 09:00 GMT/UTC every day without seasonal edits:
+For 09:00 GMT/UTC every day without seasonal edits (recommended):
+  • Use the GitHub Action in .github/workflows/daily-digest.yml (cron is UTC; set secret DIGEST_DOTENV — see .env.example). The laptop does not need to be on.
+
+  Alternatively on the Mac only:
   • Set macOS Time Zone to UTC (System Settings → General → Date & Time → Time Zone), OR
-  • Run the digest from a host that schedules in UTC (e.g. CI with a cron workflow).
+  • Adjust the plist Hour for your offset from UTC.
 
 Install (one-time):
   chmod +x scripts/run_digest.sh
